@@ -11,25 +11,32 @@ function _G.Notes.setup (options)
   _G.Notes.config = config.setup(options)
 end
 
---- Toggles enabled state.
+--- Opens add text window.
+---
+---@public
+function _G.Notes.add ()
+  main.add()
+end
+
+--- 
+---
+---@public
+function _G.Notes.refile (destination)
+  main.refile(destination)
+end
+
+--- 
+---
+---@public
+function _G.Notes.inbox ()
+  main.inbox()
+end
+
+--- 
 ---
 ---@public
 function _G.Notes.toggle ()
-  main.toggle'public_api_toggle'
-end
-
---- Sets state to enabled.
----
----@public
-function _G.Notes.enable ()
-  main.enable'public_api_enable'
-end
-
---- Sets state to disabled.
----
----@public
-function _G.Notes.disable ()
-  main.disable'public_api_disable'
+  main.toggle()
 end
 
 return _G.Notes
