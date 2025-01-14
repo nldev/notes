@@ -39,5 +39,26 @@ function _G.Notes.toggle ()
   main.toggle()
 end
 
+--- 
+---
+---@public
+function _G.Notes.bookmark (index)
+  main.bookmark(index)
+end
+
+--- 
+---
+---@public
+function _G.Notes.goto_bookmark (index)
+  main.goto_bookmark(index)
+end
+
+--- 
+---
+---@public
+function _G.Notes.bookmarks ()
+  main.bookmarks()
+end
+
 return _G.Notes
 

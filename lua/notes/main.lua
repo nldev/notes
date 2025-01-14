@@ -1,14 +1,18 @@
+-- FIXME: todo list
 -- [x] nf = find topic
 -- [x] nn = toggle last topic (similar to toggle terminal)
 -- [x] refile to last
 -- [x] ensure note/topic-specific actions are not doable from the wrong action
--- [ ] remove unused metadata (on save, on refile)
+-- [x] fix save formatting
+-- [x] remove unused metadata (on save, on refile)
 -- [ ] bookmark topic
 -- [ ] bookmark heading
 -- [ ] bookmark refile
--- [ ] save last heading as well as last_note_file
+-- [ ] save last heading
+-- [ ] note undo (reverts last add, moves contents to clipboard)
+-- [ ] remove 'Z' and other config usage
 
--- open options:
+-- FIXME: open options
 -- ni inbox
 -- [count] nc count
 -- n1 bookmarked topic/heading 1
@@ -22,13 +26,23 @@
 local state = require'notes.state'
 local log = require'notes.util.log'
 
+local function is_md_list_item (line)
+  return line:match'^%s*[%*%-%+] ' or line:match'^%s*%d+%. '
+end
+
+local function trim (s)
+  return s:match'^(.-)%s*$'
+end
+
 local main = {
   ui = {},
   topics = {},
+  bookmarks = {},
 }
 
-local last_note_file = ''
+local last_topic_filename = ''
 local last_writable_buffer = -1
+local bookmark_window = 0
 local prompt_window = 0
 local prompt_buffer = 0
 local meta_window = 0
@@ -42,10 +56,10 @@ vim.api.nvim_create_autocmd('BufEnter', {
     vim.defer_fn(function ()
       local name = vim.api.nvim_buf_get_name(0)
       if vim.fn.filereadable(name) == 1 then
-        if name:match('^' .. vim.fn.expand('~/notes') .. '/') then
+        if name:match('^' .. vim.fn.expand'~/notes' .. '/') then
           local filename = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
           if filename ~= '/home/user/notes/inbox.md' then
-            last_note_file = filename
+            last_topic_filename = filename
           end
         else
           last_writable_buffer = vim.api.nvim_get_current_buf()
@@ -76,7 +90,7 @@ end
 ---@private
 function main.toggle ()
   local name = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-  if name ~= vim.fn.expand'~/notes/inbox.md' and name:match('^' .. vim.fn.expand('~/notes') .. '/') then
+  if name == last_topic_filename and name ~= vim.fn.expand'~/notes/inbox.md' and name:match('^' .. vim.fn.expand('~/notes') .. '/') then
     vim.cmd'silent! w!'
     if last_writable_buffer > -1 and vim.api.nvim_buf_is_valid(last_writable_buffer) then
       vim.api.nvim_set_current_buf(last_writable_buffer)
@@ -84,11 +98,52 @@ function main.toggle ()
       last_writable_buffer = -1
     end
   else
-    if #last_note_file > 0 and vim.loop.fs_stat(last_note_file) then
-      vim.cmd('e ' .. last_note_file)
+    if #last_topic_filename > 0 and vim.loop.fs_stat(last_topic_filename) then
+      vim.cmd('e ' .. last_topic_filename)
     else
-      last_note_file = ''
+      last_topic_filename = ''
     end
+  end
+end
+
+local bookmarks = {}
+local path = vim.fn.expand'~/.local/share/nvim/notes_bookmarks.lua'
+if vim.loop.fs_stat(path) then
+  bookmarks = dofile(path) or {}
+end
+
+--- Bookmarks current topic (or last opened topic).
+---
+---@private
+function main.bookmark (index)
+  local name = vim.api.nvim_buf_get_name(0)
+  if string.find(name, '/home/user/notes/') then
+    bookmarks[index] = name
+  end
+  if not vim.loop.fs_stat(path) then
+    vim.cmd('!touch ' .. path)
+  end
+  local content = 'return ' .. vim.inspect(bookmarks)
+  vim.fn.writefile({ content }, path)
+end
+
+--- Opens bookmark in a new buffer.
+---
+---@private
+function main.goto_bookmark (index)
+  local name = bookmarks[index]
+  if name and vim.loop.fs_stat(name) ~= nil then
+    vim.cmd('e ' .. name)
+  end
+end
+
+function main.bookmarks ()
+  if _G.Toast then
+    local formatted = {}
+    for i, _ in ipairs(bookmarks) do
+      formatted[i] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
+    end
+    _G.Toast(formatted)
   end
 end
 
@@ -119,34 +174,7 @@ function main.refile (destination)
     table.insert(prompt, raw[i])
   end
 
-  local function save ()
-    local read = io.open(filename, 'r')
-    if not read then
-      return
-    end
-    local contents = {}
-    for line in read:lines() do
-      table.insert(contents, line)
-    end
-    read:close()
-    -- FIXME: if non-list, add extra newline
-    -- FIXME: if list, do not extra newline
-    -- FIXME: ensure 1 space at bottom
-    for i = #prompt, 1, -1 do
-      table.insert(contents, prompt[i])
-    end
-    local title = filename:match'([^/]+)$'
-    local tmp = vim.fn.stdpath'data' .. '/' .. title .. '.tmp.md'
-    local out = io.open(tmp, 'w')
-    if not out then
-      return
-    end
-    for _, line in ipairs(contents) do
-      out:write(line .. '\n')
-    end
-    out:close()
-    os.remove(filename)
-    os.rename(tmp, filename)
+  local function cleanup ()
     vim.api.nvim_command'stopinsert'
     vim.api.nvim_win_close(prompt_window, true)
     vim.api.nvim_buf_delete(prompt_buffer, { force = true })
@@ -160,22 +188,102 @@ function main.refile (destination)
     vim.defer_fn(function () vim.cmd'echo ""' end, 1500)
     last_row = 0
     prompt_window = 0
+    if bookmark_window > 0 then
+      vim.api.nvim_win_close(bookmark_window, true)
+      bookmark_window = 0
+    end
     metadata = {}
+    -- FIXME: hack to make last_topic_file persist properly after saving prompt while a topic is open
     if filename ~= '/home/user/notes/inbox.md' then
-      last_note_file = filename
+      vim.defer_fn(function ()
+        last_topic_filename = filename
+      end, 10)
     end
   end
 
-  -- inbox
+  local function save ()
+    if #prompt == 0 then
+      return
+    end
+
+    -- read existing file
+    local read = io.open(filename, 'r')
+    if not read then
+      return
+    end
+    local contents = {}
+    for line in read:lines() do
+      table.insert(contents, line)
+    end
+    read:close()
+
+    -- process text
+    for i = #contents, 1, -1 do
+      if trim(contents[i]) == '' then
+        table.remove(contents, i)
+      else
+        break
+      end
+    end
+    local first_prompt_item = trim(prompt[#prompt] or '')
+    local last_content_item = trim(contents[#contents] or '')
+    local add_extra_newline = false
+    if first_prompt_item:match'^## ' then
+      table.insert(contents, '')
+      table.insert(contents, '')
+      if trim(last_content_item) ~= '' then
+        table.insert(contents, '')
+      end
+    elseif not is_md_list_item(first_prompt_item) then
+      add_extra_newline = true
+    elseif is_md_list_item(first_prompt_item) and is_md_list_item(last_content_item) then
+      add_extra_newline = false
+    else
+      add_extra_newline = true
+    end
+    if add_extra_newline and trim(last_content_item) ~= '' then
+      table.insert(contents, '')
+    end
+    for i = 1, #prompt do
+      table.insert(contents, trim(prompt[#prompt - i + 1]))
+    end
+    while #contents > 0 and trim(contents[#contents]) == '' do
+      table.remove(contents)
+    end
+    if #contents > 0 and trim(contents[#contents]) ~= '' then
+      table.insert(contents, '')
+    end
+
+    -- create tmp file
+    local title = filename:match'([^/]+)$'
+    local tmp = vim.fn.stdpath'data' .. '/' .. title .. '.tmp.md'
+    local out = io.open(tmp, 'w')
+    if not out then
+      return
+    end
+    for _, line in ipairs(contents) do
+      out:write(line .. '\n')
+    end
+    out:close()
+
+    -- delete existing file and move tmp file to permanent location
+    os.remove(filename)
+    os.rename(tmp, filename)
+
+    -- cleanup
+    cleanup()
+  end
+
+  -- save to inbox
   if not destination or destination.type == 'inbox' then
     save()
     return
   end
 
-  -- last
+  -- save to last
   if destination.type == 'last' then
-    if #last_note_file > 0 and vim.loop.fs_stat(last_note_file) then
-      filename = last_note_file
+    if #last_topic_filename > 0 and vim.loop.fs_stat(last_topic_filename) then
+      filename = last_topic_filename
     else
       filename = '/home/user/notes/inbox.md'
     end
@@ -183,7 +291,7 @@ function main.refile (destination)
     return
   end
 
-  -- fuzzy
+  -- save to fuzzy
   if destination.type == 'fuzzy' then
     local actions = require'telescope.actions'
     local action_state = require'telescope.actions.state'
@@ -203,18 +311,23 @@ function main.refile (destination)
     return
   end
 
-  -- history
+  -- save to history
   if destination.type == 'history' then
     return
   end
 
-  -- bookmark
+  -- save to bookmark
   if destination.type == 'bookmark' then
+    local name = bookmarks[destination.num]
+    if name and vim.loop.fs_stat(name) then
+      filename = name
+      save()
+    end
     return
   end
 
-  -- subheading
-  if destination.type == 'subheading' then
+  -- save to heading
+  if destination.type == 'heading' then
   end
 end
 
@@ -280,12 +393,55 @@ function main.ui.create_metadata_window ()
   end, { buffer = true, noremap = true })
 end
 
+--- Opens bookmark help window.
+---
+---@private
+function main.ui.create_bookmark_window ()
+  local config = vim.api.nvim_win_get_config(prompt_window)
+  local width = config.width
+  local col = (config.col or 0)
+  local row = (config.row or 0) + (config.height or 0) + 2
+  local buffer = vim.api.nvim_create_buf(false, true)
+  bookmark_window = vim.api.nvim_open_win(buffer, false, {
+    title = 'Bookmarks',
+    relative = 'editor',
+    width = width,
+    height = math.min(#bookmarks, 5),
+    col = col,
+    row = row,
+    style = 'minimal',
+    border = 'rounded',
+  })
+  local formatted = {}
+  for i, _ in ipairs(bookmarks) do
+      formatted[i] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
+  end
+  local full_path = vim.fn.expand'%:p'
+  local notes_dir = vim.fn.expand'~/notes'
+  if full_path:sub(1, #notes_dir) == notes_dir then
+    return full_path:sub(#notes_dir + 2)
+  end
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, formatted)
+  vim.api.nvim_win_set_option(bookmark_window, 'winhl', 'FloatBorder:GitSignsDelete')
+  vim.api.nvim_buf_set_option(buffer, 'wrap', false)
+  vim.api.nvim_buf_set_option(buffer, 'linebreak', false)
+  vim.api.nvim_buf_set_option(buffer, 'filetype', 'text')
+  vim.api.nvim_buf_set_option(buffer, 'buftype', 'nofile')
+  vim.api.nvim_buf_set_option(buffer, 'buflisted', false)
+  vim.api.nvim_create_autocmd({ 'BufLeave' }, {
+    buffer = buffer,
+    callback = function ()
+      vim.api.nvim_win_close(bookmark_window, true)
+    end
+  })
+end
+
 --- Opens add text window, returns window number and buffer number.
 ---
 ---@private
 function main.ui.create_prompt_window ()
   local width = math.min(vim.o.columns - 10, 60)
-  local row = math.floor((vim.o.lines - 1) / 2)
+  local row = math.max(1, (math.floor((vim.o.lines - 1) / 2) - 2))
   local col = math.floor((vim.o.columns - width) / 2)
   prompt_buffer = vim.api.nvim_create_buf(false, true)
   prompt_window = vim.api.nvim_open_win(prompt_buffer, true, {
@@ -337,15 +493,24 @@ function main.ui.create_prompt_window ()
       if vim.b.note_type ~= 'todo' then
         vim.b.note_type = 'note'
       end
-      local first_line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ""
+      local first_line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ''
       local amount = math.max(1, vim.api.nvim_buf_line_count(0))
       local height = math.min(vim.o.lines - 10, amount)
       vim.api.nvim_win_set_config(prompt_window, {
         relative = 'editor',
         height = height,
-        row = math.floor((vim.o.lines - height) / 2),
+        row = math.max(1, (math.floor((vim.o.lines - height) / 2) - 2)),
         col = math.floor((vim.o.columns - width) / 2),
       })
+      if bookmark_window > 0 then
+        vim.api.nvim_win_close(bookmark_window, false)
+        bookmark_window = 0
+        vim.keymap.set({ 'n', 'x', 'i' }, '1', function () vim.api.nvim_feedkeys('1', 'n', true) end, { buffer = true, remap = true })
+        vim.keymap.set({ 'n', 'x', 'i' }, '2', function () vim.api.nvim_feedkeys('2', 'n', true) end, { buffer = true, remap = true })
+        vim.keymap.set({ 'n', 'x', 'i' }, '3', function () vim.api.nvim_feedkeys('3', 'n', true) end, { buffer = true, remap = true })
+        vim.keymap.set({ 'n', 'x', 'i' }, '4', function () vim.api.nvim_feedkeys('4', 'n', true) end, { buffer = true, remap = true })
+        vim.keymap.set({ 'n', 'x', 'i' }, '5', function () vim.api.nvim_feedkeys('5', 'n', true) end, { buffer = true, remap = true })
+      end
       vim.cmd'Z'
 
       -- todo
@@ -476,13 +641,15 @@ function main.ui.create_prompt_window ()
       table.insert(contents, 'created: ' .. date)
       table.insert(contents, 'updated: ' .. date)
       for i = #metadata, 1, -1 do
-        table.insert(contents, metadata[#metadata - i + 1])
+        local line = trim(metadata[#metadata - i + 1])
+        if line ~= 'parent:' and line ~= 'description:' and line ~= 'tags:' then
+          table.insert(contents, line)
+        end
       end
       table.insert(contents, '---')
       table.insert(contents, '')
       local lines = vim.api.nvim_buf_get_lines(prompt_buffer, 0, -1, false)
       for i = #lines, 1, -1 do
-        print(lines[#lines - i + 1])
         table.insert(contents, lines[#lines - i + 1])
       end
       for i, str in ipairs(contents) do
@@ -500,8 +667,11 @@ function main.ui.create_prompt_window ()
       vim.api.nvim_buf_call(buffer, function () vim.cmd('w! ' .. filename) end)
       vim.api.nvim_buf_delete(buffer, { force = true })
       vim.api.nvim_win_close(0, false)
+      -- FIXME: hack to make last_topic_file persist properly after saving prompt while a topic is open
       if filename ~= '/home/user/notes/inbox.md' then
-        last_note_file = filename
+        vim.defer_fn(function ()
+          last_topic_filename = filename
+        end, 10)
       end
       last_row = 0
       vim.api.nvim_command'stopinsert'
@@ -550,6 +720,25 @@ function main.ui.create_prompt_window ()
   vim.keymap.set({ 'n', 'x', 'i' }, '<c-f>', function () main.refile{ type = 'fuzzy' } end, { buffer = true, noremap = true })
   vim.keymap.set({ 'n', 'x', 'i' }, '<c-i>', function () main.refile{ type = 'inbox' } end, { buffer = true, noremap = true })
   vim.keymap.set({ 'n', 'x', 'i' }, '<c-s>', function () save() end, { buffer = true, noremap = true })
+  vim.keymap.set({ 'n', 'x', 'i' }, '<c-j>', function ()
+    if bookmark_window > 0 then
+      vim.api.nvim_win_close(bookmark_window, true)
+      bookmark_window = 0
+      return
+    end
+    if vim.b.note_type == 'note' then
+      vim.defer_fn(function ()
+        if prompt_window > 0 then
+          main.ui.create_bookmark_window()
+        end
+      end, 500)
+      vim.keymap.set({ 'n', 'x', 'i' }, '1', function () main.refile{ type = 'bookmark', num = 1 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '2', function () main.refile{ type = 'bookmark', num = 2 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '3', function () main.refile{ type = 'bookmark', num = 3 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '4', function () main.refile{ type = 'bookmark', num = 4 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '5', function () main.refile{ type = 'bookmark', num = 5 } end, { buffer = true, noremap = true })
+    end
+  end, { buffer = true, noremap = true })
   vim.keymap.set('i', '<c-w>', function () exit_todo_wrap('<c-w>', true) end, { buffer = true, noremap = true })
   vim.keymap.set('i', '<bs>', function () exit_todo_wrap('<bs>', true) end, { buffer = true, noremap = true })
   vim.keymap.set({ 'n', 'x' }, 'x', function () exit_todo_wrap'x' end, { buffer = true, noremap = true })
@@ -558,12 +747,56 @@ function main.ui.create_prompt_window ()
     vim.cmd'silent! bd!'
     last_row = 0
     vim.api.nvim_command'stopinsert'
+    if bookmark_window > 0 then
+      vim.api.nvim_win_close(bookmark_window, true)
+      bookmark_window = 0
+    end
   end, { buffer = true, noremap = true })
-  vim.keymap.set('n', '<esc>', function ()
+  vim.keymap.set({ 'n', 'x', 'i' }, '<esc>', function ()
     if vim.fn.line'$' == 1 and vim.fn.empty(vim.fn.getline(1)) == 1 and vim.b.note_type ~= 'todo' then
       vim.cmd'silent! bd!'
       last_row = 0
     end
+    if bookmark_window > 0 then
+      vim.api.nvim_win_close(bookmark_window, true)
+      bookmark_window = 0
+    end
+    vim.api.nvim_feedkeys('\x1b', 'n', true)
+  end, { buffer = true, noremap = true })
+  vim.keymap.set({ 'n', 'i' }, '<c-d>', function ()
+    local cursor_pos = vim.api.nvim_win_get_cursor(0)
+    local line = vim.api.nvim_get_current_line()
+    if line:sub(1, 6) == '- [ ] ' then
+      vim.api.nvim_set_current_line(line:sub(7))
+      cursor_pos[2] = math.min(1, cursor_pos[2] - 6)
+    else
+      if line:sub(1, 2) == '- ' then
+        vim.api.nvim_set_current_line(line:sub(3))
+        cursor_pos[2] = math.min(cursor_pos[2] - 2)
+      end
+      vim.cmd 'norm! I- [ ] '
+      cursor_pos[2] = math.min(cursor_pos[2] + 6)
+    end
+    vim.api.nvim_win_set_cursor(0, cursor_pos)
+  end, { buffer = true, noremap = true })
+  vim.keymap.set({ 'n', 'i' }, '<c-l>', function ()
+    local cursor_pos = vim.api.nvim_win_get_cursor(0)
+    local line = vim.api.nvim_get_current_line()
+    if line:sub(1, 2) == '- ' then
+      if line:sub(1, 6) == '- [ ] ' then
+        vim.api.nvim_set_current_line(line:sub(7))
+        cursor_pos[2] = math.min(cursor_pos[2] - 6)
+        vim.cmd 'norm! I- '
+        cursor_pos[2] = math.min(cursor_pos[2] + 2)
+      else
+        vim.api.nvim_set_current_line(line:sub(3))
+        cursor_pos[2] = math.min(cursor_pos[2] - 2)
+      end
+    else
+      vim.cmd 'norm! I- '
+      cursor_pos[2] = math.min(cursor_pos[2] + 2)
+    end
+    vim.api.nvim_win_set_cursor(0, cursor_pos)
   end, { buffer = true, noremap = true })
 end
 
