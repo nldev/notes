@@ -613,7 +613,7 @@ function main.ui.create_prompt_window ()
 
 
   -- build metadata
-  local date = vim.fn.strftime'%Y-%m-%dT%H:%M:%S%z'
+  local date = vim.fn.strftime'%Y-%m-%d @ %H:%M:%S'
   metadata = {
     'parent: ',
     'description: ',
@@ -621,6 +621,7 @@ function main.ui.create_prompt_window ()
   }
 
   -- save window buffer and close
+  local id = vim.fn.strftime'%Y%m%d%H%M%S'
   local filename = '/home/user/notes/inbox.md'
   local function save ()
     local title = ''
@@ -628,7 +629,7 @@ function main.ui.create_prompt_window ()
       local line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]
       local words = line:match'^#%s+(.+)'
       if words then
-        title = words:gsub('[^%w%s]', ''):match'^%s*(.-)%s*$':gsub('%s+', '-'):lower()
+        title = id .. '-' .. words:gsub('[^%w%s]', ''):match'^%s*(.-)%s*$':gsub('%s+', '-'):lower()
         filename = '/home/user/notes/' .. title .. '.md'
       end
     end
@@ -637,7 +638,7 @@ function main.ui.create_prompt_window ()
     elseif vim.b.note_type == 'topic' then
       local contents = {}
       table.insert(contents, '---')
-      table.insert(contents, 'id: ' .. string.format('%x', math.random(0, 0xFFFFFFFF)))
+      table.insert(contents, 'id: ' .. id)
       table.insert(contents, 'created: ' .. date)
       table.insert(contents, 'updated: ' .. date)
       for i = #metadata, 1, -1 do
