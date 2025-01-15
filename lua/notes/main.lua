@@ -1,28 +1,3 @@
--- FIXME: todo list
--- [x] nf = find topic
--- [x] nn = toggle last topic (similar to toggle terminal)
--- [x] refile to last
--- [x] ensure note/topic-specific actions are not doable from the wrong action
--- [x] fix save formatting
--- [x] remove unused metadata (on save, on refile)
--- [ ] bookmark topic
--- [ ] bookmark heading
--- [ ] bookmark refile
--- [ ] save last heading
--- [ ] note undo (reverts last add, moves contents to clipboard)
--- [ ] remove 'Z' and other config usage
-
--- FIXME: open options
--- ni inbox
--- [count] nc count
--- n1 bookmarked topic/heading 1
--- n2 bookmarked topic/heading 2
--- n3 bookmarked topic/heading 3
--- n4 bookmarked topic/heading 4
--- n5 bookmarked topic/heading 5
--- nf fuzzy
--- ns subheading
-
 local state = require'notes.state'
 local log = require'notes.util.log'
 
@@ -40,16 +15,59 @@ local main = {
   bookmarks = {},
 }
 
-local last_topic_filename = ''
+local last_topic_filename = vim.fn.expand'~/notes/inbox.md'
 local last_writable_buffer = -1
-local bookmark_window = 0
+local help_window = 0
 local prompt_window = 0
 local prompt_buffer = 0
 local meta_window = 0
 local last_row = 0
 local is_opening_meta = false
 local is_opening_telescope = false
+local leader_pressed = false
+local help_queued = false
 local metadata = {}
+
+local function reset_leader ()
+  if leader_pressed then
+    vim.keymap.del('i', 't', { buffer = prompt_buffer })
+    vim.keymap.del('i', 'h', { buffer = prompt_buffer })
+    vim.keymap.del('i', 'd', { buffer = prompt_buffer })
+    vim.keymap.del('i', 'l', { buffer = prompt_buffer })
+    vim.keymap.del('n', 't', { buffer = prompt_buffer })
+    vim.keymap.del('n', 'h', { buffer = prompt_buffer })
+    vim.keymap.del('n', 'd', { buffer = prompt_buffer })
+    vim.keymap.del('n', 'l', { buffer = prompt_buffer })
+    if vim.b.note_type == 'note' then
+      vim.keymap.del('n', '1', { buffer = prompt_buffer })
+      vim.keymap.del('n', '2', { buffer = prompt_buffer })
+      vim.keymap.del('n', '3', { buffer = prompt_buffer })
+      vim.keymap.del('n', '4', { buffer = prompt_buffer })
+      vim.keymap.del('n', '5', { buffer = prompt_buffer })
+      vim.keymap.del('n', 'f', { buffer = prompt_buffer })
+      vim.keymap.del('n', 'i', { buffer = prompt_buffer })
+      vim.keymap.del('x', '1', { buffer = prompt_buffer })
+      vim.keymap.del('x', '2', { buffer = prompt_buffer })
+      vim.keymap.del('x', '3', { buffer = prompt_buffer })
+      vim.keymap.del('x', '4', { buffer = prompt_buffer })
+      vim.keymap.del('x', '5', { buffer = prompt_buffer })
+      vim.keymap.del('x', 'f', { buffer = prompt_buffer })
+      vim.keymap.del('x', 'i', { buffer = prompt_buffer })
+      vim.keymap.del('i', '1', { buffer = prompt_buffer })
+      vim.keymap.del('i', '2', { buffer = prompt_buffer })
+      vim.keymap.del('i', '3', { buffer = prompt_buffer })
+      vim.keymap.del('i', '4', { buffer = prompt_buffer })
+      vim.keymap.del('i', '5', { buffer = prompt_buffer })
+      vim.keymap.del('i', 'f', { buffer = prompt_buffer })
+      vim.keymap.del('i', 'i', { buffer = prompt_buffer })
+    elseif vim.b.note_type == 'topic' then
+      vim.keymap.del('n', 'm', { buffer = prompt_buffer })
+      vim.keymap.del('x', 'm', { buffer = prompt_buffer })
+      vim.keymap.del('i', 'm', { buffer = prompt_buffer })
+    end
+    leader_pressed = false
+  end
+end
 
 vim.api.nvim_create_autocmd('BufEnter', {
   callback = function ()
@@ -90,7 +108,7 @@ end
 ---@private
 function main.toggle ()
   local name = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-  if name == last_topic_filename and name ~= vim.fn.expand'~/notes/inbox.md' and name:match('^' .. vim.fn.expand('~/notes') .. '/') then
+  if name == last_topic_filename and name:match('^' .. vim.fn.expand('~/notes') .. '/') then
     vim.cmd'silent! w!'
     if last_writable_buffer > -1 and vim.api.nvim_buf_is_valid(last_writable_buffer) then
       vim.api.nvim_set_current_buf(last_writable_buffer)
@@ -101,7 +119,7 @@ function main.toggle ()
     if #last_topic_filename > 0 and vim.loop.fs_stat(last_topic_filename) then
       vim.cmd('e ' .. last_topic_filename)
     else
-      last_topic_filename = ''
+      last_topic_filename = vim.fn.expand'~/notes/inbox.md'
     end
   end
 end
@@ -117,7 +135,7 @@ end
 ---@private
 function main.bookmark (index)
   local name = vim.api.nvim_buf_get_name(0)
-  if string.find(name, '/home/user/notes/') then
+  if name:find'/home/user/notes/' then
     bookmarks[index] = name
   end
   if not vim.loop.fs_stat(path) then
@@ -140,8 +158,15 @@ end
 function main.bookmarks ()
   if _G.Toast then
     local formatted = {}
+    if last_topic_filename ~= '' then
+      formatted[1] = '[*] ' .. vim.fs.basename(last_topic_filename)
+    end
     for i, _ in ipairs(bookmarks) do
-      formatted[i] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
+      local index = i
+      if last_topic_filename ~= '' then
+        index = i + 1
+      end
+      formatted[index] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
     end
     _G.Toast(formatted)
   end
@@ -159,14 +184,7 @@ end
 ---@param destination table Data specifying where text should be moved to.
 ---@private
 function main.refile (destination)
-  if vim.b.note_type ~= 'note' then
-    return
-  end
-  if vim.fn.line'$' == 1 and vim.fn.empty(vim.fn.getline(1)) == 1 and vim.b.note_type ~= 'todo' then
-    vim.cmd'silent! bd!'
-    vim.api.nvim_command'stopinsert'
-    return
-  end
+  reset_leader()
   local filename = '/home/user/notes/inbox.md'
   local raw = vim.api.nvim_buf_get_lines(prompt_buffer, 0, -1, false)
   local prompt = {}
@@ -188,9 +206,9 @@ function main.refile (destination)
     vim.defer_fn(function () vim.cmd'echo ""' end, 1500)
     last_row = 0
     prompt_window = 0
-    if bookmark_window > 0 then
-      vim.api.nvim_win_close(bookmark_window, true)
-      bookmark_window = 0
+    if help_window > 0 then
+      vim.api.nvim_win_close(help_window, true)
+      help_window = 0
     end
     metadata = {}
     -- FIXME: hack to make last_topic_file persist properly after saving prompt while a topic is open
@@ -203,6 +221,9 @@ function main.refile (destination)
 
   local function save ()
     if #prompt == 0 then
+      return
+    end
+    if vim.b.note_type ~= 'note' then
       return
     end
 
@@ -296,6 +317,10 @@ function main.refile (destination)
     local actions = require'telescope.actions'
     local action_state = require'telescope.actions.state'
     is_opening_telescope = true
+    if help_window > 0 then
+      vim.api.nvim_win_close(help_window, true)
+      help_window = 0
+    end
     require'telescope.builtin'.find_files{
       cwd = '~/notes',
       prompt_title = 'Topic Refile',
@@ -337,6 +362,9 @@ end
 function main.ui.create_metadata_window ()
   if vim.b.note_type ~= 'topic' then
     return
+  end
+  if help_window > 0 then
+    vim.api.nvim_win_close(help_window, false)
   end
   is_opening_meta = true
   local config = vim.api.nvim_win_get_config(prompt_window)
@@ -396,14 +424,20 @@ end
 --- Opens bookmark help window.
 ---
 ---@private
-function main.ui.create_bookmark_window ()
+function main.ui.create_help_window ()
+  if not vim.api.nvim_win_is_valid(prompt_window) then
+    return
+  end
+  if help_window > 0 then
+    vim.api.nvim_win_close(help_window, false)
+  end
   local config = vim.api.nvim_win_get_config(prompt_window)
   local width = config.width
   local col = (config.col or 0)
   local row = (config.row or 0) + (config.height or 0) + 2
   local buffer = vim.api.nvim_create_buf(false, true)
-  bookmark_window = vim.api.nvim_open_win(buffer, false, {
-    title = 'Bookmarks',
+  help_window = vim.api.nvim_open_win(buffer, false, {
+    title = '<C-k>',
     relative = 'editor',
     width = width,
     height = math.min(#bookmarks, 5),
@@ -413,8 +447,15 @@ function main.ui.create_bookmark_window ()
     border = 'rounded',
   })
   local formatted = {}
+  if last_topic_filename ~= '' then
+    formatted[1] = '[*] ' .. vim.fs.basename(last_topic_filename)
+  end
   for i, _ in ipairs(bookmarks) do
-      formatted[i] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
+    local index = i
+    if last_topic_filename ~= '' then
+      index = i + 1
+    end
+    formatted[index] = '[' .. i .. '] ' .. vim.fs.basename(bookmarks[i])
   end
   local full_path = vim.fn.expand'%:p'
   local notes_dir = vim.fn.expand'~/notes'
@@ -422,7 +463,7 @@ function main.ui.create_bookmark_window ()
     return full_path:sub(#notes_dir + 2)
   end
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, formatted)
-  vim.api.nvim_win_set_option(bookmark_window, 'winhl', 'FloatBorder:GitSignsDelete')
+  vim.api.nvim_win_set_option(help_window, 'winhl', 'FloatBorder:GitSignsDelete')
   vim.api.nvim_buf_set_option(buffer, 'wrap', false)
   vim.api.nvim_buf_set_option(buffer, 'linebreak', false)
   vim.api.nvim_buf_set_option(buffer, 'filetype', 'text')
@@ -431,7 +472,7 @@ function main.ui.create_bookmark_window ()
   vim.api.nvim_create_autocmd({ 'BufLeave' }, {
     buffer = buffer,
     callback = function ()
-      vim.api.nvim_win_close(bookmark_window, true)
+      vim.api.nvim_win_close(help_window, true)
     end
   })
 end
@@ -480,6 +521,11 @@ function main.ui.create_prompt_window ()
   vim.api.nvim_create_autocmd({ 'BufLeave' }, {
     buffer = prompt_buffer,
     callback = function ()
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, false)
+        help_window = 0
+      end
       if (#vim.api.nvim_list_wins() > 1) and not is_opening_meta and not is_opening_telescope then
         vim.api.nvim_win_close(0, true)
       end
@@ -490,8 +536,10 @@ function main.ui.create_prompt_window ()
   vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI' }, {
     buffer = prompt_buffer,
     callback = function ()
-      if vim.b.note_type ~= 'todo' then
-        vim.b.note_type = 'note'
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, false)
+        help_window = 0
       end
       local first_line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ''
       local amount = math.max(1, vim.api.nvim_buf_line_count(0))
@@ -502,16 +550,25 @@ function main.ui.create_prompt_window ()
         row = math.max(1, (math.floor((vim.o.lines - height) / 2) - 2)),
         col = math.floor((vim.o.columns - width) / 2),
       })
-      if bookmark_window > 0 then
-        vim.api.nvim_win_close(bookmark_window, false)
-        bookmark_window = 0
-        vim.keymap.set({ 'n', 'x', 'i' }, '1', function () vim.api.nvim_feedkeys('1', 'n', true) end, { buffer = true, remap = true })
-        vim.keymap.set({ 'n', 'x', 'i' }, '2', function () vim.api.nvim_feedkeys('2', 'n', true) end, { buffer = true, remap = true })
-        vim.keymap.set({ 'n', 'x', 'i' }, '3', function () vim.api.nvim_feedkeys('3', 'n', true) end, { buffer = true, remap = true })
-        vim.keymap.set({ 'n', 'x', 'i' }, '4', function () vim.api.nvim_feedkeys('4', 'n', true) end, { buffer = true, remap = true })
-        vim.keymap.set({ 'n', 'x', 'i' }, '5', function () vim.api.nvim_feedkeys('5', 'n', true) end, { buffer = true, remap = true })
-      end
       vim.cmd'Z'
+
+      -- topic
+      if vim.b.note_type ~= 'todo' then
+        local is_topic = first_line:match'^#%s$' ~= nil
+          or first_line:match'^#%s$' ~= nil
+          or first_line:match'^#%s+' ~= nil
+        if is_topic then
+          vim.b.note_type = 'topic'
+          topic_style()
+        else
+          vim.b.note_type = 'note'
+        end
+      end
+
+      -- note
+      if vim.b.note_type == 'note' then
+        note_style()
+      end
 
       -- todo
       local is_empty = vim.fn.line'$' == 1 and vim.fn.getline(1) == ''
@@ -584,17 +641,6 @@ function main.ui.create_prompt_window ()
         end
       end
 
-      -- topic
-      if vim.b.note_type ~= 'todo' then
-        local is_topic = first_line:match'^#%s$' ~= nil
-          or first_line:match'^#%s$' ~= nil
-          or first_line:match'^#%s+' ~= nil
-        if is_topic then
-          vim.b.note_type = 'topic'
-          topic_style()
-        end
-      end
-
       -- tag
       if vim.b.note_type ~= 'todo' then
         local is_tag = first_line:lower():match'^#[%w-]+$'
@@ -603,14 +649,8 @@ function main.ui.create_prompt_window ()
           tag_style()
         end
       end
-
-      -- note
-      if vim.b.note_type == 'note' then
-        note_style()
-      end
     end,
   })
-
 
   -- build metadata
   local date = vim.fn.strftime'%Y-%m-%d @ %H:%M:%S'
@@ -635,7 +675,8 @@ function main.ui.create_prompt_window ()
     end
     if vim.b.note_type == 'note' then
       main.refile{ type = 'last' }
-    elseif vim.b.note_type == 'topic' then
+    end
+    if vim.b.note_type == 'topic' then
       local contents = {}
       table.insert(contents, '---')
       table.insert(contents, 'id: ' .. id)
@@ -717,29 +758,6 @@ function main.ui.create_prompt_window ()
       exit_todo(check_is_beginning)
     end
   end
-  vim.keymap.set({ 'n', 'x', 'i' }, '<c-k>', function () main.ui.create_metadata_window() end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'x', 'i' }, '<c-f>', function () main.refile{ type = 'fuzzy' } end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'x', 'i' }, '<c-i>', function () main.refile{ type = 'inbox' } end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'x', 'i' }, '<c-s>', function () save() end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'x', 'i' }, '<c-j>', function ()
-    if bookmark_window > 0 then
-      vim.api.nvim_win_close(bookmark_window, true)
-      bookmark_window = 0
-      return
-    end
-    if vim.b.note_type == 'note' then
-      vim.defer_fn(function ()
-        if prompt_window > 0 then
-          main.ui.create_bookmark_window()
-        end
-      end, 500)
-      vim.keymap.set({ 'n', 'x', 'i' }, '1', function () main.refile{ type = 'bookmark', num = 1 } end, { buffer = true, noremap = true })
-      vim.keymap.set({ 'n', 'x', 'i' }, '2', function () main.refile{ type = 'bookmark', num = 2 } end, { buffer = true, noremap = true })
-      vim.keymap.set({ 'n', 'x', 'i' }, '3', function () main.refile{ type = 'bookmark', num = 3 } end, { buffer = true, noremap = true })
-      vim.keymap.set({ 'n', 'x', 'i' }, '4', function () main.refile{ type = 'bookmark', num = 4 } end, { buffer = true, noremap = true })
-      vim.keymap.set({ 'n', 'x', 'i' }, '5', function () main.refile{ type = 'bookmark', num = 5 } end, { buffer = true, noremap = true })
-    end
-  end, { buffer = true, noremap = true })
   vim.keymap.set('i', '<c-w>', function () exit_todo_wrap('<c-w>', true) end, { buffer = true, noremap = true })
   vim.keymap.set('i', '<bs>', function () exit_todo_wrap('<bs>', true) end, { buffer = true, noremap = true })
   vim.keymap.set({ 'n', 'x' }, 'x', function () exit_todo_wrap'x' end, { buffer = true, noremap = true })
@@ -748,9 +766,9 @@ function main.ui.create_prompt_window ()
     vim.cmd'silent! bd!'
     last_row = 0
     vim.api.nvim_command'stopinsert'
-    if bookmark_window > 0 then
-      vim.api.nvim_win_close(bookmark_window, true)
-      bookmark_window = 0
+    if help_window > 0 then
+      vim.api.nvim_win_close(help_window, true)
+      help_window = 0
     end
   end, { buffer = true, noremap = true })
   vim.keymap.set({ 'n', 'x', 'i' }, '<esc>', function ()
@@ -758,46 +776,145 @@ function main.ui.create_prompt_window ()
       vim.cmd'silent! bd!'
       last_row = 0
     end
-    if bookmark_window > 0 then
-      vim.api.nvim_win_close(bookmark_window, true)
-      bookmark_window = 0
+    if help_window > 0 then
+      vim.api.nvim_win_close(help_window, true)
+      help_window = 0
     end
-    vim.api.nvim_feedkeys('\x1b', 'n', true)
-  end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'i' }, '<c-d>', function ()
-    local cursor_pos = vim.api.nvim_win_get_cursor(0)
-    local line = vim.api.nvim_get_current_line()
-    if line:sub(1, 6) == '- [ ] ' then
-      vim.api.nvim_set_current_line(line:sub(7))
-      cursor_pos[2] = math.min(1, cursor_pos[2] - 6)
+    if leader_pressed then
+      reset_leader()
     else
-      if line:sub(1, 2) == '- ' then
-        vim.api.nvim_set_current_line(line:sub(3))
-        cursor_pos[2] = math.min(cursor_pos[2] - 2)
-      end
-      vim.cmd 'norm! I- [ ] '
-      cursor_pos[2] = math.min(cursor_pos[2] + 6)
+      vim.api.nvim_feedkeys('\x1b', 'n', true)
     end
-    vim.api.nvim_win_set_cursor(0, cursor_pos)
   end, { buffer = true, noremap = true })
-  vim.keymap.set({ 'n', 'i' }, '<c-l>', function ()
-    local cursor_pos = vim.api.nvim_win_get_cursor(0)
-    local line = vim.api.nvim_get_current_line()
-    if line:sub(1, 2) == '- ' then
+  vim.keymap.set({ 'n', 'x', 'i' }, '<c-s>', function () save() end, { buffer = true, noremap = true })
+  local session = 0
+  vim.keymap.set({ 'n', 'x', 'i' }, '<c-k>', function ()
+    if session <= 10 then
+      session = session + 1
+    else
+      session = 0
+    end
+    local this_session = session
+    if leader_pressed then
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, true)
+        help_window = 0
+      end
+      return
+    end
+    if not help_queued then
+      vim.defer_fn(function ()
+        help_queued = false
+        if prompt_window > 0 and leader_pressed and this_session == session then
+          main.ui.create_help_window()
+        end
+      end, 500)
+    end
+    leader_pressed = true
+    help_queued = true
+    vim.keymap.set({ 'n', 'i' }, 'h', function ()
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, true)
+        help_window = 0
+      end
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)
+      local line = vim.api.nvim_get_current_line()
+      if line:sub(1, 3) == '## ' then
+        vim.api.nvim_set_current_line(line:sub(4))
+        cursor_pos[2] = math.max(1, cursor_pos[2] - 3)
+      else
+        vim.cmd 'norm! I## '
+        cursor_pos[2] = math.max(cursor_pos[2] + 3)
+      end
+      vim.api.nvim_win_set_cursor(0, cursor_pos)
+    end, { buffer = true, noremap = true })
+    vim.keymap.set({ 'n', 'i' }, 'd', function ()
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, true)
+        help_window = 0
+      end
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)
+      local line = vim.api.nvim_get_current_line()
       if line:sub(1, 6) == '- [ ] ' then
         vim.api.nvim_set_current_line(line:sub(7))
-        cursor_pos[2] = math.min(cursor_pos[2] - 6)
-        vim.cmd 'norm! I- '
-        cursor_pos[2] = math.min(cursor_pos[2] + 2)
+        cursor_pos[2] = math.max(1, cursor_pos[2] - 6)
       else
-        vim.api.nvim_set_current_line(line:sub(3))
-        cursor_pos[2] = math.min(cursor_pos[2] - 2)
+        if line:sub(1, 2) == '- ' then
+          vim.api.nvim_set_current_line(line:sub(3))
+          cursor_pos[2] = math.max(cursor_pos[2] - 2)
+        end
+        vim.cmd 'norm! I- [ ] '
+        cursor_pos[2] = math.max(cursor_pos[2] + 6)
       end
-    else
-      vim.cmd 'norm! I- '
-      cursor_pos[2] = math.min(cursor_pos[2] + 2)
+      vim.api.nvim_win_set_cursor(0, cursor_pos)
+    end, { buffer = true, noremap = true })
+    vim.keymap.set({ 'n', 'i' }, 't', function ()
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, true)
+        help_window = 0
+      end
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)
+      local line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]
+      local is_first_line = vim.api.nvim_win_get_cursor(0)[1] == 1
+      if line:sub(1, 2) == '# ' then
+        vim.api.nvim_buf_set_lines(0, 0, 1, false, { line:sub(3) })
+        if is_first_line then
+          cursor_pos[2] = math.max(1, cursor_pos[2] - 2)
+        end
+      else
+        vim.cmd 'norm! ggI# '
+        if is_first_line then
+          cursor_pos[2] = math.max(cursor_pos[2] + 2)
+        end
+      end
+      vim.api.nvim_win_set_cursor(0, cursor_pos)
+    end, { buffer = true, noremap = true })
+    vim.keymap.set({ 'n', 'i' }, 'l', function ()
+      reset_leader()
+      if help_window > 0 then
+        vim.api.nvim_win_close(help_window, true)
+        help_window = 0
+      end
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)
+      local line = vim.api.nvim_get_current_line()
+      if line:sub(1, 2) == '- ' then
+        if line:sub(1, 6) == '- [ ] ' then
+          vim.api.nvim_set_current_line(line:sub(7))
+          cursor_pos[2] = math.max(cursor_pos[2] - 6)
+          vim.cmd 'norm! I- '
+          cursor_pos[2] = math.max(cursor_pos[2] + 2)
+        else
+          vim.api.nvim_set_current_line(line:sub(3))
+          cursor_pos[2] = math.max(cursor_pos[2] - 2)
+        end
+      else
+        vim.cmd 'norm! I- '
+        cursor_pos[2] = math.max(cursor_pos[2] + 2)
+      end
+      vim.api.nvim_win_set_cursor(0, cursor_pos)
+    end, { buffer = true, noremap = true })
+    if vim.b.note_type == 'note' then
+      vim.keymap.set({ 'n', 'x', 'i' }, '1', function () main.refile{ type = 'bookmark', num = 1 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '2', function () main.refile{ type = 'bookmark', num = 2 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '3', function () main.refile{ type = 'bookmark', num = 3 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '4', function () main.refile{ type = 'bookmark', num = 4 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, '5', function () main.refile{ type = 'bookmark', num = 5 } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, 'f', function () main.refile{ type = 'fuzzy' } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, 'i', function () main.refile{ type = 'inbox' } end, { buffer = true, noremap = true })
+    elseif vim.b.note_type == 'topic' then
+      vim.keymap.set({ 'n', 'x', 'i' }, 'm', function ()
+        reset_leader()
+        if help_window > 0 then
+          vim.api.nvim_win_close(help_window, true)
+          help_window = 0
+        end
+        main.ui.create_metadata_window()
+      end, { buffer = true, noremap = true })
     end
-    vim.api.nvim_win_set_cursor(0, cursor_pos)
   end, { buffer = true, noremap = true })
 end
 
