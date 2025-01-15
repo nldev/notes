@@ -905,6 +905,7 @@ function main.ui.create_prompt_window ()
       vim.keymap.set({ 'n', 'x', 'i' }, '5', function () main.refile{ type = 'bookmark', num = 5 } end, { buffer = true, noremap = true })
       vim.keymap.set({ 'n', 'x', 'i' }, 'f', function () main.refile{ type = 'fuzzy' } end, { buffer = true, noremap = true })
       vim.keymap.set({ 'n', 'x', 'i' }, 'i', function () main.refile{ type = 'inbox' } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, 's', function () save() end, { buffer = true, noremap = true })
     elseif vim.b.note_type == 'topic' then
       vim.keymap.set({ 'n', 'x', 'i' }, 'm', function ()
         reset_leader()
