@@ -60,5 +60,12 @@ function _G.Notes.bookmarks ()
   main.bookmarks()
 end
 
+--- 
+---
+---@public
+function _G.Notes.undo ()
+  main.undo()
+end
+
 return _G.Notes
 
