@@ -280,7 +280,6 @@ function main.bookmarks ()
       index = i + 1
     end
   end
-  print(vim.inspect(formatted))
   _G.Toast(formatted)
 end
 
