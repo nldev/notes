@@ -28,6 +28,13 @@ end
 --- 
 ---
 ---@public
+function _G.Notes.toc ()
+  main.toc()
+end
+
+--- 
+---
+---@public
 function _G.Notes.inbox ()
   main.inbox()
 end
@@ -44,6 +51,13 @@ end
 ---@public
 function _G.Notes.bookmark (index)
   main.bookmark(index)
+end
+
+--- 
+---
+---@public
+function _G.Notes.delete_bookmark (index)
+  main.delete_bookmark(index)
 end
 
 --- 
