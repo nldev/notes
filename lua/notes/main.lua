@@ -9,6 +9,24 @@ local function trim (s)
   return s:match'^(.-)%s*$'
 end
 
+local function get_win_height ()
+  local max = vim.o.lines - 10
+  local height = vim.fn.line'$'
+  if height >= max then
+    return max
+  end
+  local saved_pos = vim.fn.winsaveview()
+  local total_virtual_lines = 0
+  local wrap_width = vim.api.nvim_win_get_width(0)
+  for lnum = 1, vim.fn.line'$' do
+    local line_text = vim.fn.getline(lnum)
+    local line_width = vim.fn.strdisplaywidth(line_text)
+    total_virtual_lines = total_virtual_lines + math.max(1, math.ceil(line_width / wrap_width))
+  end
+  vim.fn.winrestview(saved_pos)
+  return total_virtual_lines
+end
+
 local main = {
   ui = {},
   topics = {},
@@ -551,8 +569,8 @@ function main.ui.create_prompt_window ()
   vim.b.note_type = 'note'
   vim.bo.buftype = 'nofile'
   vim.bo.buflisted = false
-  vim.opt.wrap = false
-  vim.opt.linebreak = false
+  vim.opt.wrap = true
+  vim.opt.linebreak = true
   if vim.fn.mode(1):sub(1, 1) ~= 'i' then
     vim.api.nvim_feedkeys('i', 'n', true)
   end
@@ -580,8 +598,7 @@ function main.ui.create_prompt_window ()
         help_window = 0
       end
       local first_line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or ''
-      local amount = math.max(1, vim.api.nvim_buf_line_count(0))
-      local height = math.min(vim.o.lines - 10, amount)
+      local height = math.min(vim.o.lines - 10, get_win_height())
       vim.api.nvim_win_set_config(prompt_window, {
         relative = 'editor',
         height = height,
