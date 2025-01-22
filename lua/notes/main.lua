@@ -1,4 +1,23 @@
 local log = require'notes.util.log'
+local sqlite = require'sqlite'
+
+
+
+-- database
+local tables = {
+  topics = sqlite.tbl('topics', {
+    id = { type = 'integer', primary = true, autoincrement = true },
+    text = { type = 'text', required = true, unique = true },
+    created = { type = 'date', required = true },
+    updated = { type = 'date', required = true },
+    description = 'text',
+  }),
+  headings = sqlite.tbl('headings', {
+    id = { type = 'integer', primary = true, autoincrement = true },
+    topic_id = { reference = 'topics.id', required = true, on_delete = 'cascade' },
+    text = 'text',
+  }),
+}
 
 
 
@@ -12,6 +31,7 @@ local config = {
   inbox_file = vim.fn.expand'~/notes/inbox.md',
   toc_file = vim.fn.expand'~/notes/toc.md',
   bookmarks_file = vim.fn.stdpath'data' .. '/notes_bookmarks.lua',
+  region = 'America/Chicago',
 }
 
 
@@ -37,46 +57,8 @@ local state = {
 
 
 
--- initialization
-local function init ()
-  -- ensure bookmarks file exists
-  if vim.loop.fs_stat(config.bookmarks_file) then
-    state.bookmarks = dofile(config.bookmarks_file) or {}
-  end
-  -- track last note and non-note
-  vim.api.nvim_create_autocmd('BufEnter', {
-    callback = function ()
-      vim.defer_fn(function ()
-        local name = vim.api.nvim_buf_get_name(0)
-        if vim.fn.filereadable(name) ~= 1 then
-          return
-        end
-        if name:match('^' .. config.notes_dir) then
-          local filename = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-          state.last_topic_filename = filename
-        else
-          state.writable_buffer = vim.api.nvim_get_current_buf()
-        end
-      end, 0)
-    end,
-  })
-  -- setup debug commands
-  if config.debug then
-    vim.api.nvim_create_user_command('NotesDebugBookmarksInspect', function ()
-      print(vim.inspect(state.bookmarks))
-    end, { nargs = 0 })
-    vim.api.nvim_create_user_command('NotesDebugBookmarksLength', function ()
-      print(#state.bookmarks)
-    end, { nargs = 0 })
-    vim.api.nvim_create_user_command('NotesDebugBookmarksForEach', function ()
-      for i = 1, #state.bookmarks do
-        if state.bookmarks[i] ~= nil then
-          print(i .. ': ' .. state.bookmarks[i])
-        end
-      end
-    end, { nargs = 0 })
-  end
-end
+-- constants
+local picker_options = {}
 
 
 
@@ -149,6 +131,158 @@ local function reset_leader ()
     end
     state.leader_pressed = false
   end
+end
+
+local function get_headings (filename)
+  local headings = {}
+  local file = io.open(filename, 'r')
+  if not file then
+    return headings
+  end
+  local tmp = {}
+  for line in file:lines() do
+    local a = line:match'^(#+%s+.*)$'
+    if a then
+      local b = a:gsub('# ', '')
+      local heading_text = b:gsub('#', ' ')
+      table.insert(tmp, heading_text)
+      print(heading_text)
+    end
+  end
+  for i, _ in ipairs(tmp) do
+    headings[#tmp - i + 1] = tmp[i]
+  end
+  file:close()
+  return headings
+end
+
+local function format_time (s)
+  local y,m,d,H,MM,S = s:match("(%d+)%-(%d+)%-(%d+)%s+@%s+(%d+):(%d+):(%d+)")
+  if not y then return s end
+  local cmd = string.format("TZ='%s' date -d '%s-%s-%s %s:%s:%s' +%%s", config.region, y,m,d,H,MM,S)
+  local p = io.popen(cmd)
+  if not p then return s end
+  local epoch = p:read("*a"):gsub("\n","")
+  p:close()
+  local e = tonumber(epoch)
+  if not e then return s end
+  return os.date("!%Y-%m-%dT%H:%M:%SZ", e)
+end
+
+local function save_to_sql (filename)
+  local file = io.open(filename, 'r')
+  if not file then
+    return
+  end
+  local lines = {}
+  for line in file:lines() do
+    table.insert(lines, line)
+  end
+  file:close()
+  local in_yaml, meta, topic, subs = false, {}, nil, {}
+  for _, l in ipairs(lines) do
+    if l:match'^%-%-%-$' then
+      in_yaml = not in_yaml
+    elseif in_yaml then
+      local k, v = l:match'^(%w+):%s*(.*)'
+      if k and v then meta[k] = v end
+    else
+      local t1 = l:match'^#%s+(.*)'
+      if t1 and not topic then topic = t1 end
+      local sub = l:match'^(##+)%s+(.*)'
+      if sub then table.insert(subs, l:match'^#+%s+(.*)') end
+    end
+  end
+  local created = format_time(meta.created)
+  local updated = format_time(meta.updated)
+  local existing = tables.topics:where{ text = topic }
+  if existing then
+    tables.topics:update{
+      where = { id = meta.id },
+      set = {
+        id = meta.id,
+        text = meta.text,
+        created = created,
+        updated = updated,
+        description = meta.description,
+      },
+    }
+  else
+    tables.topics:insert{
+      id = meta.id,
+      text = topic,
+      created = created,
+      updated = updated,
+      description = meta.description,
+    }
+    existing = tables.topics:where{ text = topic }
+  end
+  -- Clear existing headings and insert the new ones
+  -- if existing then
+  --   headings:remove({ topic_id = existing.id })
+  --   for _, sub in ipairs(subs) do
+  --     headings:insert({ topic_id = existing.id, text = sub })
+  --   end
+  -- end
+end
+
+
+
+-- initialization
+local function init ()
+  -- ensure bookmarks file exists
+  if vim.loop.fs_stat(config.bookmarks_file) then
+    state.bookmarks = dofile(config.bookmarks_file) or {}
+  end
+  -- setup sqlite
+  sqlite{
+    uri = vim.fn.stdpath'data' .. '/notes_db.sqlite',
+    topics = tables.topics,
+    headings = tables.headings,
+  }
+  -- track last note and non-note
+  vim.api.nvim_create_autocmd('BufEnter', {
+    callback = function ()
+      vim.defer_fn(function ()
+        local name = vim.api.nvim_buf_get_name(0)
+        if vim.fn.filereadable(name) ~= 1 then
+          return
+        end
+        if name:match('^' .. config.notes_dir) then
+          local filename = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+          state.last_topic_filename = filename
+        else
+          state.writable_buffer = vim.api.nvim_get_current_buf()
+        end
+      end, 0)
+    end,
+  })
+  -- setup debug commands
+  if config.debug then
+    vim.api.nvim_create_user_command('NotesDebugBookmarksInspect', function ()
+      print(vim.inspect(state.bookmarks))
+    end, { nargs = 0 })
+    vim.api.nvim_create_user_command('NotesDebugBookmarksLength', function ()
+      print(#state.bookmarks)
+    end, { nargs = 0 })
+    vim.api.nvim_create_user_command('NotesDebugBookmarksForEach', function ()
+      for i = 1, #state.bookmarks do
+        if state.bookmarks[i] ~= nil then
+          print(i .. ': ' .. state.bookmarks[i])
+        end
+      end
+    end, { nargs = 0 })
+  end
+  -- listen for file changes 
+  vim.loop.fs_event_start(vim.loop.new_fs_event(), config.notes_dir, { recursive = true }, function (error, filename)
+    if not error and filename then
+      local file = io.open(config.notes_dir .. '/' .. filename, 'r')
+      if file then
+        save_to_sql(config.notes_dir .. '/' .. filename)
+        file:close()
+      end
+    end
+  end)
 end
 
 
@@ -259,7 +393,6 @@ function main.goto_bookmark (index)
     vim.cmd('e ' .. name)
   end
 end
-
 
 --- Displays current bookmarks.
 ---
@@ -419,6 +552,9 @@ function main.refile (destination)
     os.remove(filename)
     os.rename(tmp, filename)
 
+    -- save to sql
+    save_to_sql(filename)
+
     -- cleanup
     cleanup()
   end
@@ -478,6 +614,48 @@ function main.refile (destination)
     return
   end
 
+  -- save to heading
+  if destination.type == 'heading' then
+    local actions = require'telescope.actions'
+    local action_state = require'telescope.actions.state'
+    local pickers = require'telescope.pickers'
+    local finders = require'telescope.finders'
+    local conf = require'telescope.config'.values
+    state.is_opening_telescope = true
+    if state.help_window > 0 then
+      vim.api.nvim_win_close(state.help_window, true)
+      state.help_window = 0
+    end
+    require'telescope.builtin'.find_files{
+      cwd = config.notes_dir,
+      prompt_title = 'Find Topic (Heading Refile)',
+      attach_mappings = function ()
+        actions.select_default:replace(function (a)
+          filename = action_state.get_selected_entry().path
+          actions.close(a)
+          state.is_opening_telescope = true
+          pickers.new(picker_options, {
+            prompt_title = 'Heading Refile',
+            finder = finders.new_table(get_headings(filename)),
+            sorter = conf.generic_sorter(picker_options),
+            attach_mappings = function ()
+              actions.select_default:replace(function (b)
+                local data = action_state.get_selected_entry()
+                local heading = data[1]
+                -- FIXME: open topic at heading
+                print(heading)
+                actions.close(b)
+              end)
+              return true
+            end,
+          }):find()
+        end)
+        return true
+      end,
+    }
+    return
+  end
+
   -- save to history
   if destination.type == 'history' then
     return
@@ -491,10 +669,6 @@ function main.refile (destination)
       save()
     end
     return
-  end
-
-  -- save to heading
-  if destination.type == 'heading' then
   end
 end
 
@@ -598,7 +772,7 @@ function main.ui.create_help_window ()
   local formatted = {}
   local index = 1
   if state.last_topic_filename ~= '' then
-    table.insert(formatted, '[n] ' .. vim.fs.basename(state.last_topic_filename))
+    table.insert(formatted, '[s] ' .. vim.fs.basename(state.last_topic_filename))
     index = index + 1
   end
   for i = 1, #state.bookmarks do
@@ -1080,6 +1254,7 @@ function main.ui.create_prompt_window ()
       vim.keymap.set({ 'n', 'x', 'i' }, '4', function () main.refile{ type = 'bookmark', num = 4 } end, { buffer = true, noremap = true })
       vim.keymap.set({ 'n', 'x', 'i' }, '5', function () main.refile{ type = 'bookmark', num = 5 } end, { buffer = true, noremap = true })
       vim.keymap.set({ 'n', 'x', 'i' }, 'f', function () main.refile{ type = 'fuzzy' } end, { buffer = true, noremap = true })
+      vim.keymap.set({ 'n', 'x', 'i' }, 'F', function () main.refile{ type = 'heading' } end, { buffer = true, noremap = true })
       vim.keymap.set({ 'n', 'x', 'i' }, 'i', function () main.refile{ type = 'inbox' } end, { buffer = true, noremap = true })
     elseif vim.b.note_type == 'topic' then
       vim.keymap.set({ 'n', 'x', 'i' }, 'm', function ()
