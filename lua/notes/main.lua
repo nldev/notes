@@ -156,17 +156,23 @@ local function get_headings (filename)
   return headings
 end
 
-local function format_time (s)
-  local y,m,d,H,MM,S = s:match("(%d+)%-(%d+)%-(%d+)%s+@%s+(%d+):(%d+):(%d+)")
-  if not y then return s end
-  local cmd = string.format("TZ='%s' date -d '%s-%s-%s %s:%s:%s' +%%s", config.region, y,m,d,H,MM,S)
-  local p = io.popen(cmd)
-  if not p then return s end
-  local epoch = p:read("*a"):gsub("\n","")
-  p:close()
+local function format_time (str)
+  local y,m,d,H,MM,S = str:match'(%d+)%-(%d+)%-(%d+)%s+@%s+(%d+):(%d+):(%d+)'
+  if not y then
+    return str
+  end
+  local cmd = str.format('TZ="%s" date -d "%s-%s-%s %s:%s:%s" +%%s', config.region, y,m,d,H,MM,S)
+  local proc = io.popen(cmd)
+  if not proc then
+    return str
+  end
+  local epoch = proc:read'*a':gsub('\n', '')
+  proc:close()
   local e = tonumber(epoch)
-  if not e then return s end
-  return os.date("!%Y-%m-%dT%H:%M:%SZ", e)
+  if not e then
+    return str
+  end
+  return os.date('!%Y-%m-%dT%H:%M:%SZ', e)
 end
 
 local function save_to_sql (filename)
