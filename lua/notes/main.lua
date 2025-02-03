@@ -209,6 +209,9 @@ local function save_to_sql (filename)
       if sub then table.insert(subs, l:match'^#+%s+(.*)') end
     end
   end
+  if next(meta) == nil then
+    return
+  end
   local created = format_time(meta.created)
   local updated = format_time(meta.updated)
   local existing = tables.topics:where{ text = topic }
@@ -274,7 +277,7 @@ local function init ()
           --   buffer = buffer,
           --   callback = function ()
           --     local updated = vim.fn.strftime'%Y-%m-%d @ %H:%M:%S'
-          --     -- save_to_sql(filename)
+          --     save_to_sql(filename)
           --   end,
           -- })
           -- vim.b.notes_hooked = true
@@ -285,7 +288,7 @@ local function init ()
     end,
   })
   -- parse topics
-  local paths = vim.fn.glob(config.notes_dir .. '/**/*', true, true)
+  local paths = vim.fn.glob(config.notes_dir .. '/**/*.md', true, true)
   for _, path in ipairs(paths) do
     save_to_sql(path)
   end
