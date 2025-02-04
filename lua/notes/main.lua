@@ -1358,6 +1358,9 @@ function main.ui.create_prompt_window ()
   end, { buffer = true, noremap = true })
 end
 
+--- Opens picker for opening topic in a new buffer.
+---
+---@private
 -- FIXME: display bookmark / last note flags before heading
 -- FIXME: sort by last accessed unless search input exists (cache this on disk)
 function main.topics ()

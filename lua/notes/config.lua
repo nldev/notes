@@ -17,7 +17,7 @@ local defaults = vim.deepcopy(config.options)
 ---@param options NotesOptions Notes configuration table.
 ---
 ---@private
-function config.defaults(options)
+function config.defaults (options)
   config.options =
     vim.deepcopy(vim.tbl_deep_extend('keep', options or {}, defaults or {}))
   assert(
@@ -29,10 +29,10 @@ end
 
 --- Define your Notes setup.
 ---
----@param options NotesOptions Notes configuration table.
+---@param options NotesOptions? Notes configuration table.
 ---
 ---@usage `require'notes'.setup()` (add `{}` with your |Notes.options| table)
-function config.setup(options)
+function config.setup (options)
   config.options = config.defaults(options or {})
   return config.options
 end
