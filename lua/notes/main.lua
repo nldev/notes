@@ -44,23 +44,6 @@ local tables = {
 
 
 
--- config
--- FIXME: combine user config with defaults
--- FIXME: get default region from system
-local config = {
-  debug = true,
-  notes_dir = vim.fn.expand'~/notes',
-  data_dir = vim.fn.stdpath'data',
-  cache_dir = vim.fn.stdpath'cache',
-  inbox_file = vim.fn.expand'~/notes/inbox.md',
-  toc_file = vim.fn.expand'~/notes/toc.md',
-  bookmarks_file = vim.fn.stdpath'data' .. '/notes_bookmarks.lua',
-  db_file = vim.fn.stdpath'data' .. '/notes_db.sqlite',
-  region = 'America/Chicago',
-}
-
-
-
 -- state
 local state = {
   last_topic_filename = config.inbox_file,
@@ -650,7 +633,7 @@ function main.refile (destination)
       },
       attach_mappings = function ()
         actions.select_default:replace(function (buffer)
-          filename = action_state.get_selected_entry().path
+          filename = action_state.get_selected_entry().filename
           actions.close(buffer)
           save()
         end)
@@ -684,7 +667,7 @@ function main.refile (destination)
       },
       attach_mappings = function ()
         actions.select_default:replace(function (a)
-          filename = action_state.get_selected_entry().path
+          filename = action_state.get_selected_entry().filename
           actions.close(a)
           state.is_opening_telescope = true
           pickers.new(picker_options, {
