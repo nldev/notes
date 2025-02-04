@@ -53,6 +53,7 @@ local state = {
   prompt_buffer = 0,
   meta_window = 0,
   last_row = 0,
+  is_saving = false,
   is_opening_meta = false,
   is_opening_telescope = false,
   leader_pressed = false,
@@ -743,6 +744,7 @@ function main.ui.create_metadata_window ()
   vim.opt.wrap = false
   vim.opt.linebreak = false
   local function save ()
+    state.is_saving = true
     state.metadata = {}
     for _, line in ipairs(vim.api.nvim_buf_get_lines(buffer, 0, -1, false)) do
       table.insert(state.metadata, line)
@@ -877,6 +879,22 @@ function main.ui.create_prompt_window ()
   if vim.fn.mode(1):sub(1, 1) ~= 'i' then
     vim.api.nvim_feedkeys('i', 'n', true)
   end
+  local function on_close ()
+    local bufnr = vim.api.nvim_get_current_buf()
+    if bufnr ~= state.prompt_buffer then
+      return
+    end
+    if not state.is_saving then
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local content = table.concat(lines, '\n')
+        vim.fn.setreg('+', content)
+        vim.fn.setreg('', content)
+        vim.fn.setreg('0', content)
+      end
+    end
+    state.is_saving = false
+  end
   local function on_change ()
     reset_leader()
     if state.help_window > 0 then
@@ -1005,6 +1023,16 @@ function main.ui.create_prompt_window ()
       state.is_opening_meta = false
       state.is_opening_telescope = false
     end
+  })
+
+  -- on buffer close
+  vim.api.nvim_create_autocmd('BufDelete', {
+    buffer = state.prompt_buffer,
+    callback = on_close,
+  })
+  vim.api.nvim_create_autocmd('WinClosed', {
+    pattern = '*',
+    callback = on_close,
   })
 
   -- on buffer change
