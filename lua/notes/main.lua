@@ -72,6 +72,17 @@ local picker_options = {}
 
 
 -- helpers
+local function is_valid_path (path)
+  local is_in_dot_folder = path:match'.*[/.]%.?[^/]*$'
+  if is_in_dot_folder then
+    return false
+  end
+  if path == config.inbox_file or path == config.toc_file then
+    return false
+  end
+  return true
+end
+
 local function is_md_list_item (line)
   return line:match'^%s*[%*%-%+] ' or line:match'^%s*%d+%. '
 end
@@ -184,7 +195,7 @@ local function format_time (str)
 end
 
 local function save_to_sql (filename)
-  if filename == config.inbox_file or filename == config.toc_file then
+  if not is_valid_path(filename) then
     return
   end
   local file = io.open(filename, 'r')
@@ -1103,7 +1114,7 @@ function main.ui.create_prompt_window ()
       vim.api.nvim_buf_delete(buffer, { force = true })
       vim.api.nvim_win_close(0, false)
       -- FIXME: hack to make last_topic_file persist properly after saving prompt while a topic is open
-      if filename ~= config.inbox_file and filename ~= config.toc_file then
+      if is_valid_path(filename) then
         vim.defer_fn(function ()
           state.last_topic_filename = filename
         end, 10)
