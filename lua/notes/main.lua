@@ -23,6 +23,7 @@ local tables = {
 
 -- config
 -- FIXME: combine user config with defaults
+-- FIXME: get default region from system
 local config = {
   debug = true,
   notes_dir = vim.fn.expand'~/notes',
@@ -31,6 +32,7 @@ local config = {
   inbox_file = vim.fn.expand'~/notes/inbox.md',
   toc_file = vim.fn.expand'~/notes/toc.md',
   bookmarks_file = vim.fn.stdpath'data' .. '/notes_bookmarks.lua',
+  db_file = vim.fn.stdpath'data' .. '/notes_db.sqlite',
   region = 'America/Chicago',
 }
 
@@ -199,6 +201,9 @@ local function save_to_sql (filename)
       if sub then table.insert(subs, l:match'^#+%s+(.*)') end
     end
   end
+  if not meta or not meta.created or not meta.updated then
+    return
+  end
   local created = format_time(meta.created)
   local updated = format_time(meta.updated)
   local existing = tables.topics:where{ text = topic }
@@ -223,11 +228,10 @@ local function save_to_sql (filename)
     }
     existing = tables.topics:where{ text = topic }
   end
-  -- Clear existing headings and insert the new ones
   -- if existing then
-  --   headings:remove({ topic_id = existing.id })
+  --   existing:remove({ topic_id = existing.id })
   --   for _, sub in ipairs(subs) do
-  --     headings:insert({ topic_id = existing.id, text = sub })
+  --     existing:insert({ topic_id = existing.id, text = sub })
   --   end
   -- end
 end
@@ -241,8 +245,9 @@ local function init ()
     state.bookmarks = dofile(config.bookmarks_file) or {}
   end
   -- setup sqlite
+  sqlite.new(config.db_file)
   sqlite{
-    uri = vim.fn.stdpath'data' .. '/notes_db.sqlite',
+    uri = config.db_file,
     topics = tables.topics,
     headings = tables.headings,
   }
@@ -433,6 +438,7 @@ end
 ---
 ---@param destination table Data specifying where text should be moved to.
 ---@private
+-- FIXME: should remove non-standard single / double quotes
 function main.refile (destination)
   reset_leader()
   local filename = config.inbox_file
