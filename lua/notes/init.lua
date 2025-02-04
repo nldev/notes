@@ -42,6 +42,13 @@ end
 --- 
 ---
 ---@public
+function _G.Notes.topics ()
+  main.topics()
+end
+
+--- 
+---
+---@public
 function _G.Notes.toggle ()
   main.toggle()
 end

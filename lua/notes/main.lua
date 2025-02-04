@@ -1,5 +1,27 @@
 local log = require'notes.util.log'
 local sqlite = require'sqlite'
+local actions = require'telescope.actions'
+local action_state = require'telescope.actions.state'
+local pickers = require'telescope.pickers'
+local finders = require'telescope.finders'
+local telescope = require'telescope.builtin'
+local telescope_config = require'telescope.config'.values
+
+
+
+-- config
+-- FIXME: combine user config with defaults
+local config = {
+  debug = false,
+  notes_dir = vim.fn.expand'~/notes',
+  data_dir = vim.fn.stdpath'data',
+  cache_dir = vim.fn.stdpath'cache',
+  inbox_file = vim.fn.expand'~/notes/inbox.md',
+  toc_file = vim.fn.expand'~/notes/toc.md',
+  db_file = vim.fn.stdpath'data' .. '/notes.sqlite',
+  bookmarks_file = vim.fn.stdpath'data' .. '/notes_bookmarks.lua',
+  region = 'America/Chicago',
+}
 
 
 
@@ -8,6 +30,7 @@ local tables = {
   topics = sqlite.tbl('topics', {
     id = { type = 'integer', primary = true, autoincrement = true },
     text = { type = 'text', required = true, unique = true },
+    filename = { type = 'text', required = true, unique = true },
     created = { type = 'date', required = true },
     updated = { type = 'date', required = true },
     description = 'text',
@@ -148,11 +171,10 @@ local function get_headings (filename)
       local b = a:gsub('# ', '')
       local heading_text = b:gsub('#', ' ')
       table.insert(tmp, heading_text)
-      print(heading_text)
     end
   end
   for i, _ in ipairs(tmp) do
-    headings[#tmp - i + 1] = tmp[i]
+    headings[#tmp - i + 1] = { filename = filename, text = tmp[i] }
   end
   file:close()
   return headings
@@ -178,6 +200,9 @@ local function format_time (str)
 end
 
 local function save_to_sql (filename)
+  if filename == config.inbox_file or filename == config.toc_file then
+    return
+  end
   local file = io.open(filename, 'r')
   if not file then
     return
@@ -201,7 +226,7 @@ local function save_to_sql (filename)
       if sub then table.insert(subs, l:match'^#+%s+(.*)') end
     end
   end
-  if not meta or not meta.created or not meta.updated then
+  if next(meta) == nil then
     return
   end
   local created = format_time(meta.created)
@@ -213,6 +238,7 @@ local function save_to_sql (filename)
       set = {
         id = meta.id,
         text = meta.text,
+        filename = filename,
         created = created,
         updated = updated,
         description = meta.description,
@@ -222,6 +248,7 @@ local function save_to_sql (filename)
     tables.topics:insert{
       id = meta.id,
       text = topic,
+      filename = filename,
       created = created,
       updated = updated,
       description = meta.description,
@@ -251,38 +278,36 @@ local function init ()
     topics = tables.topics,
     headings = tables.headings,
   }
-  -- track last note and non-note
+  -- on enter hook
   vim.api.nvim_create_autocmd('BufEnter', {
     callback = function ()
-      vim.defer_fn(function ()
-        local name = vim.api.nvim_buf_get_name(0)
-        if vim.fn.filereadable(name) ~= 1 then
-          return
+      local name = vim.api.nvim_buf_get_name(0)
+      if vim.fn.filereadable(name) ~= 1 then
+        return
+      end
+      if name:match('^' .. config.notes_dir) then
+        local buffer = vim.api.nvim_get_current_buf()
+        local filename = vim.api.nvim_buf_get_name(buffer)
+        state.last_topic_filename = filename
+        if not vim.b.notes_hooked then
+          -- vim.api.nvim_create_autocmd('BufWritePre', {
+          --   buffer = buffer,
+          --   callback = function ()
+          --     local updated = vim.fn.strftime'%Y-%m-%d @ %H:%M:%S'
+          --     save_to_sql(filename)
+          --   end,
+          -- })
+          -- vim.b.notes_hooked = true
         end
-        if name:match('^' .. config.notes_dir) then
-          local filename = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-          state.last_topic_filename = filename
-        else
-          state.writable_buffer = vim.api.nvim_get_current_buf()
-        end
-      end, 0)
+      else
+        state.writable_buffer = vim.api.nvim_get_current_buf()
+      end
     end,
   })
-  -- setup debug commands
-  if config.debug then
-    vim.api.nvim_create_user_command('NotesDebugBookmarksInspect', function ()
-      print(vim.inspect(state.bookmarks))
-    end, { nargs = 0 })
-    vim.api.nvim_create_user_command('NotesDebugBookmarksLength', function ()
-      print(#state.bookmarks)
-    end, { nargs = 0 })
-    vim.api.nvim_create_user_command('NotesDebugBookmarksForEach', function ()
-      for i = 1, #state.bookmarks do
-        if state.bookmarks[i] ~= nil then
-          print(i .. ': ' .. state.bookmarks[i])
-        end
-      end
-    end, { nargs = 0 })
+  -- parse topics
+  local paths = vim.fn.glob(config.notes_dir .. '/**/*.md', true, true)
+  for _, path in ipairs(paths) do
+    save_to_sql(path)
   end
   -- listen for file changes 
   vim.loop.fs_event_start(vim.loop.new_fs_event(), config.notes_dir, { recursive = true }, function (error, filename)
@@ -604,16 +629,25 @@ function main.refile (destination)
 
   -- save to fuzzy
   if destination.type == 'fuzzy' then
-    local actions = require'telescope.actions'
-    local action_state = require'telescope.actions.state'
     state.is_opening_telescope = true
     if state.help_window > 0 then
       vim.api.nvim_win_close(state.help_window, true)
       state.help_window = 0
     end
-    require'telescope.builtin'.find_files{
+    telescope.find_files{
       cwd = config.notes_dir,
       prompt_title = 'Topic Refile',
+      finder = finders.new_table{
+        results = tables.topics:get(),
+        entry_maker = function (entry)
+          return {
+            value = entry.filename,
+            display = entry.text,
+            ordinal = entry.text,
+            filename = entry.filename,
+          }
+        end
+      },
       attach_mappings = function ()
         actions.select_default:replace(function (buffer)
           filename = action_state.get_selected_entry().path
@@ -628,19 +662,26 @@ function main.refile (destination)
 
   -- save to heading
   if destination.type == 'heading' then
-    local actions = require'telescope.actions'
-    local action_state = require'telescope.actions.state'
-    local pickers = require'telescope.pickers'
-    local finders = require'telescope.finders'
-    local conf = require'telescope.config'.values
+    local conf = telescope_config
     state.is_opening_telescope = true
     if state.help_window > 0 then
       vim.api.nvim_win_close(state.help_window, true)
       state.help_window = 0
     end
-    require'telescope.builtin'.find_files{
+    telescope.find_files{
       cwd = config.notes_dir,
       prompt_title = 'Find Topic (Heading Refile)',
+      finder = finders.new_table{
+        results = tables.topics:get(),
+        entry_maker = function (entry)
+          return {
+            value = entry.filename,
+            display = entry.text,
+            ordinal = entry.text,
+            filename = entry.filename,
+          }
+        end
+      },
       attach_mappings = function ()
         actions.select_default:replace(function (a)
           filename = action_state.get_selected_entry().path
@@ -653,7 +694,7 @@ function main.refile (destination)
             attach_mappings = function ()
               actions.select_default:replace(function (b)
                 local data = action_state.get_selected_entry()
-                local heading = data[1]
+                local heading = data[1].text
                 -- FIXME: open topic at heading
                 print(heading)
                 actions.close(b)
@@ -761,8 +802,8 @@ function main.ui.create_help_window ()
   end
   local conf = vim.api.nvim_win_get_config(state.prompt_window)
   local width = conf.width
-  local col = (conf.col or 0)
-  local row = (conf.row or 0) + (conf.height or 0) + 2
+  local row = math.max(1, (math.floor((vim.o.lines - 1) / 2) - 2)) + 3
+  local col = math.floor((vim.o.columns - width) / 2)
   local buffer = vim.api.nvim_create_buf(false, true)
   local count = 0
   for i = 1, #state.bookmarks do
@@ -1279,6 +1320,28 @@ function main.ui.create_prompt_window ()
       end, { buffer = true, noremap = true })
     end
   end, { buffer = true, noremap = true })
+end
+
+-- FIXME: display bookmark / last note flags before heading
+-- FIXME: sort by last accessed unless search input exists (cache this on disk)
+function main.topics ()
+  local opts = {}
+  pickers.new(opts, {
+    prompt_title = 'Find Topic',
+    finder = finders.new_table{
+      results = tables.topics:get(),
+      entry_maker = function (entry)
+        return {
+          value = entry.filename,
+          display = entry.text,
+          ordinal = entry.text,
+          filename = entry.filename,
+        }
+      end
+    },
+    sorter = telescope_config.generic_sorter(opts),
+    previewer = telescope_config.file_previewer(opts),
+  }):find()
 end
 
 init()
