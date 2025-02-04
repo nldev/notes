@@ -72,6 +72,20 @@ local picker_options = {}
 
 
 -- helpers
+local function normalize (str)
+  -- remove emojis
+  str = str:gsub('[%s]*([\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x80-\xBF])', '')
+  -- remove non-standard characters
+  str = str:gsub('‘', "'")
+  str = str:gsub('’', "'")
+  str = str:gsub('“', '"')
+  str = str:gsub('”', '"')
+  str = str:gsub('–', '-')
+  str = str:gsub('—', '-')
+  str = str:gsub('‒', '-')
+  return str
+end
+
 local function is_valid_path (path)
   local is_in_dot_folder = path:match'.*[/.]%.?[^/]*$'
   if is_in_dot_folder then
@@ -558,7 +572,7 @@ function main.refile (destination)
         table.insert(contents, '')
       end
       for i = 1, #prompt do
-        table.insert(contents, trim(prompt[#prompt - i + 1]))
+        table.insert(contents, normalize(trim(prompt[#prompt - i + 1])))
       end
       while #contents > 0 and trim(contents[#contents]) == '' do
         table.remove(contents)
